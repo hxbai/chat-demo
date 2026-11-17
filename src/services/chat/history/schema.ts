@@ -212,6 +212,12 @@ const message: Read<ChatMessage> = (value) => {
       'CONTEXT_LENGTH_EXCEEDED',
       'TIMEOUT'
     )(item.status),
+    ...(item.ds_chat_model === undefined
+      ? {}
+      : { ds_chat_model: oneOf('deepseek-flash', 'deepseek-v4-pro')(item.ds_chat_model) }),
+    ...(item.ds_chat_effort === undefined
+      ? {}
+      : { ds_chat_effort: oneOf('low', 'high', 'max')(item.ds_chat_effort) }),
     thinking_enabled: boolean(item.thinking_enabled),
     search_enabled: boolean(item.search_enabled),
     accumulated_token_usage: count(item.accumulated_token_usage),

@@ -1,251 +1,325 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { openDB, type IDBPDatabase } from 'idb'
+import { ClientResponseError, type RecordModel } from 'pocketbase'
+import { pb } from '../pocketbase.js'
+import * as local from './localDb.js'
 import { toSessionSummary, type Session, type SessionSummary } from './types.js'
 
-/** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
-const DB_VERSION = 11
+export type { StoredFile } from './localDb.js'
+export {
+  addStagingSession,
+  clearStaging,
+  saveStagingFiles,
+  updateStagingFileTypes,
+  reportStorageError,
+} from './localDb.js'
 
-/** 文件原件按附件的本地 id 存储，所有引用同一 id 的消息共用一份；用于缩略图、打开查看，以及没有 serverId 时补传。 */
-export type StoredFile = {
-  id: string
-  blob: Blob
+type RemoteSession = RecordModel & {
+  sid: string
+  revision: number
+  payload: Session
+  summary: SessionSummary
+  deleted: boolean
 }
-
-/** 文件引用留在摘要中，删除会话时通过索引判断原件是否仍被引用。 */
-type StoredSessionSummary = SessionSummary & { fileIds: string[] }
-
-interface ChatDB extends DBSchema {
-  /** 当前使用的会话，界面读写都在这里 */
-  sessions: { key: string; value: Session }
-  sessionSummaries: {
-    key: string
-    value: StoredSessionSummary
-    indexes: { fileIds: string }
-  }
-  /** 当前使用的文件原件 */
-  files: { key: string; value: StoredFile }
-  /**
-   * 历史导入的暂存：导入过程中会话与原件只写入这两个存储，`sessions` / `files` 保持不变；
-   * 全部校验通过后在一个事务中替换正式数据并清空暂存，失败时只清空暂存。
-   */
-  sessionsStaging: { key: string; value: Session }
-  filesStaging: { key: string; value: StoredFile }
+export type Recovery = {
+  session: Session
+  files: local.StoredFile[]
+  revision: number
+  writeId: string
 }
-
-let dbPromise: Promise<IDBPDatabase<ChatDB>> | null = null
-
-const storedSummary = (session: Session): StoredSessionSummary => ({
-  ...toSessionSummary(session),
-  fileIds: [
-    ...new Set(
-      session.messages.flatMap((message) =>
-        message.role === 'user' ? message.files.map((file) => file.id) : []
-      )
-    ),
-  ],
-})
-
-const abortTransaction = (tx: { abort(): void }) => {
-  try {
-    tx.abort()
-  } catch {
-    // 事务已因请求失败中止。
+const revisions = new Map<string, number>()
+const historySnapshot = new Map<string, number>()
+let listedRevisions = new Map<string, number>()
+export const acceptHistorySnapshot = () => {
+  historySnapshot.clear()
+  for (const [sid, revision] of listedRevisions) {
+    historySnapshot.set(sid, revision)
   }
 }
-
-// 每个操作拿到连接后立即创建事务；IndexedDB 按创建顺序执行范围重叠的事务，读取总能看到之前发起的写入。
-const getDB = () =>
-  (dbPromise ??= openDB<ChatDB>('chat-demo', DB_VERSION, {
-    upgrade(db, _oldVersion, _newVersion, tx) {
-      // 初始化当前格式需要的存储与索引，不迁移旧消息。
-      for (const name of ['sessions', 'files', 'sessionsStaging', 'filesStaging'] as const) {
-        if (!db.objectStoreNames.contains(name)) {
-          db.createObjectStore(name, { keyPath: 'id' })
-        }
-      }
-      const summaries = db.objectStoreNames.contains('sessionSummaries')
-        ? tx.objectStore('sessionSummaries')
-        : db.createObjectStore('sessionSummaries', { keyPath: 'id' })
-      if (!summaries.indexNames.contains('fileIds')) {
-        summaries.createIndex('fileIds', 'fileIds', { multiEntry: true })
-      }
-    },
-  }).catch((error: unknown) => {
-    // 打开失败后允许界面重试，避免一直复用已拒绝的 Promise。
-    dbPromise = null
-    throw error
-  }))
-
-export const loadSessionSummaries = async (): Promise<SessionSummary[]> =>
-  (await (await getDB()).getAll('sessionSummaries')).map(toSessionSummary)
-
-export const loadSession = async (id: string): Promise<Session | undefined> =>
-  (await getDB()).get('sessions', id)
-
-export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
-  const summary = storedSummary(session)
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
-  await Promise.all([
-    (async () => {
-      try {
-        for (const file of files) {
-          await tx.objectStore('files').put(file)
-        }
-        await tx.objectStore('sessions').put(session)
-        await tx.objectStore('sessionSummaries').put(summary)
-      } catch (error) {
-        abortTransaction(tx)
-        throw error
-      }
-    })(),
-    tx.done,
-  ])
+export const conflicts = new Set<string>()
+let queue: Promise<unknown> = Promise.resolve()
+const enqueue = <T>(run: () => Promise<T>): Promise<T> => {
+  const task = queue.then(run)
+  queue = task.catch(() => {})
+  return task
 }
-
-/** 未打开的会话也可重命名，只读取该会话，原子更新详情和列表。 */
-export const renameSession = async (id: string, title: string): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries'], 'readwrite')
-  await Promise.all([
-    (async () => {
-      try {
-        const sessions = tx.objectStore('sessions')
-        const session = await sessions.get(id)
-        if (session) {
-          session.title = title
-          await sessions.put(session)
-          await tx.objectStore('sessionSummaries').put(storedSummary(session))
-        }
-      } catch (error) {
-        abortTransaction(tx)
-        throw error
-      }
-    })(),
-    tx.done,
-  ])
+const owner = () => {
+  if (!pb.authStore.record?.id) {
+    throw new Error('Please sign in again.')
+  }
+  return pb.authStore.record.id
 }
-
-/** 删除会话，仅清理已无会话引用的本地原件；远端文件不删。 */
-export const deleteSession = async (sessionId: string): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
-  await Promise.all([
-    (async () => {
-      try {
-        const summaries = tx.objectStore('sessionSummaries')
-        const summary = await summaries.get(sessionId)
-        await tx.objectStore('sessions').delete(sessionId)
-        await summaries.delete(sessionId)
-        for (const id of summary?.fileIds ?? []) {
-          if ((await summaries.index('fileIds').count(id)) === 0) {
-            await tx.objectStore('files').delete(id)
-          }
-        }
-      } catch (error) {
-        abortTransaction(tx)
-        throw error
-      }
-    })(),
-    tx.done,
-  ])
-}
-
-const putFiles = async (store: 'files' | 'filesStaging', files: StoredFile[]) => {
-  const tx = (await getDB()).transaction(store, 'readwrite')
-  await Promise.all([...files.map((file) => tx.store.put(file)), tx.done])
-}
-
-export const saveFiles = (files: StoredFile[]): Promise<void> => putFiles('files', files)
-
-export const loadFile = async (id: string): Promise<Blob | undefined> =>
-  (await (await getDB()).get('files', id))?.blob
-
-/** 清空导入暂存：开始导入前清除上次中断（如关闭页面）遗留的数据，导入失败后清除本次写入。 */
-export const clearStaging = async (): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessionsStaging', 'filesStaging'], 'readwrite')
-  await Promise.all([
-    tx.objectStore('sessionsStaging').clear(),
-    tx.objectStore('filesStaging').clear(),
-    tx.done,
-  ])
-}
-
-export const addStagingSession = async (session: Session): Promise<void> => {
-  await (await getDB()).add('sessionsStaging', session)
-}
-
-export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
-  putFiles('filesStaging', files)
-
-/** 图片位于会话 JSON 之后；全部读完后回填具体 MIME，保留归档给出的 isImage 标识。 */
-export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>): Promise<void> => {
-  const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
-  await Promise.all([
-    (async () => {
-      for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
-        const session = cursor.value
-        let changed = false
-        for (const message of session.messages) {
-          if (message.role !== 'user') {
-            continue
-          }
-          for (const file of message.files) {
-            const type = types.get(file.id) ?? ''
-            if (file.mimeType !== type) {
-              file.mimeType = type
-              changed = true
-            }
-          }
-        }
-        if (changed) {
-          await cursor.update(session)
-        }
-      }
-    })(),
-    tx.done,
-  ])
-}
-
-/**
- * 导入完成后用暂存替换正式数据：同一事务中替换会话、摘要和原件，并清空暂存。
- * 逐条游标复制，同一时间只读取一条记录；事务失败时整体回滚，正式数据不变。
- */
-export const commitStaging = async (): Promise<SessionSummary[]> => {
-  const summaries: SessionSummary[] = []
-  const tx = (await getDB()).transaction(
-    ['sessions', 'sessionSummaries', 'files', 'sessionsStaging', 'filesStaging'],
-    'readwrite'
-  )
-  const move = async (from: 'sessionsStaging' | 'filesStaging', to: 'sessions' | 'files') => {
-    try {
-      const target = tx.objectStore(to)
-      await target.clear()
-      if (to === 'sessions') {
-        await tx.objectStore('sessionSummaries').clear()
-      }
-      for (
-        let cursor = await tx.objectStore(from).openCursor();
-        cursor;
-        cursor = await cursor.continue()
-      ) {
-        await target.put(cursor.value)
-        if (to === 'sessions') {
-          const summary = storedSummary(cursor.value as Session)
-          await tx.objectStore('sessionSummaries').put(summary)
-          summaries.push(toSessionSummary(summary))
-        }
-      }
-      await tx.objectStore(from).clear()
-    } catch (error) {
-      // 同步抛出的错误不会让事务自动回滚，需显式中止，避免只提交清空和部分移入。
-      abortTransaction(tx)
+// Unsynced snapshots survive reloads and network failures, isolated by account.
+const recoveryConnections = new Map<string, Promise<IDBPDatabase>>()
+const recoveryDB = () => {
+  const id = owner()
+  let connection = recoveryConnections.get(id)
+  if (!connection) {
+    connection = openDB(`ds-chat-recovery-${id}`, 1, {
+      upgrade(db) {
+        db.createObjectStore('pending', { keyPath: 'session.id' })
+        db.createObjectStore('meta')
+      },
+    }).catch((error: unknown) => {
+      recoveryConnections.delete(id)
       throw error
+    })
+    recoveryConnections.set(id, connection)
+  }
+  return connection
+}
+export const pendingRecovery = async (): Promise<Recovery[]> =>
+  (await recoveryDB()).getAll('pending')
+export const hasPendingWrites = () => queue
+const remoteRecords = () =>
+  pb.collection<RemoteSession>('chat_sessions').getFullList({
+    fields: 'id,sid,revision,summary,deleted',
+    filter: 'deleted = false',
+  })
+const getRemote = async (id: string): Promise<RemoteSession | undefined> => {
+  try {
+    return await pb
+      .collection<RemoteSession>('chat_sessions')
+      .getFirstListItem(pb.filter('sid = {:sid}', { sid: id }))
+  } catch (error) {
+    if (error instanceof ClientResponseError && error.status === 404) {
+      return undefined
+    }
+    throw error
+  }
+}
+export const loadSessionSummaries = async (): Promise<SessionSummary[]> => {
+  const records = await remoteRecords()
+  listedRevisions = new Map(records.map((record) => [record.sid, record.revision]))
+  const byId = new Map(records.map((r) => [r.sid, r.summary]))
+  for (const recovery of await pendingRecovery()) {
+    revisions.set(recovery.session.id, recovery.revision)
+    byId.set(recovery.session.id, toSessionSummary(recovery.session))
+  }
+  return [...byId.values()]
+}
+export const loadSession = async (id: string): Promise<Session | undefined> => {
+  const recovery = (await (await recoveryDB()).get('pending', id)) as Recovery | undefined
+  if (recovery) {
+    revisions.set(id, recovery.revision)
+    return recovery.session
+  }
+  const record = await getRemote(id)
+  if (!record || record.deleted) {
+    return undefined
+  }
+  revisions.set(id, record.revision)
+  return record.payload
+}
+
+export const readSessionSnapshot = async (id: string, cached?: Session) => {
+  const revision = revisions.get(id)
+  if (cached && revision !== undefined && listedRevisions.get(id) === revision) {
+    return { session: cached, revision }
+  }
+  const record = await getRemote(id)
+  return record && !record.deleted
+    ? { session: record.payload, revision: record.revision }
+    : undefined
+}
+export const acceptSessionSnapshot = (id: string, revision: number) => revisions.set(id, revision)
+
+const uploadFiles = async (files: local.StoredFile[]) => {
+  for (const { id, blob } of files) {
+    const existing = await pb
+      .collection('chat_files')
+      .getList(1, 1, { filter: pb.filter('fid = {:id}', { id }) })
+    if (existing.totalItems) {
+      continue
+    }
+    const body = new FormData()
+    body.set('owner', owner())
+    body.set('fid', id)
+    body.set('mime', blob.type)
+    body.set('original', blob, 'attachment')
+    try {
+      await pb.collection('chat_files').create(body)
+    } catch (error) {
+      // Another device may have uploaded the shared immutable attachment first.
+      const found = await pb
+        .collection('chat_files')
+        .getList(1, 1, { filter: pb.filter('fid = {:id}', { id }) })
+      if (!found.totalItems) {
+        throw error
+      }
     }
   }
-  await Promise.all([move('sessionsStaging', 'sessions'), move('filesStaging', 'files'), tx.done])
-  // 直接返回本次提交的列表，调用方无需在替换成功后再发起可能失败的读取。
-  return summaries
 }
+// Local writes have their own queue so a slow network never delays the recovery snapshot.
+let localWrites: Promise<unknown> = Promise.resolve()
+const persistRecovery = (session: Session, files: local.StoredFile[]) => {
+  const task = localWrites.then(async () => {
+    const db = await recoveryDB()
+    // Keep revision reads and snapshot replacement atomic with sync acknowledgements.
+    const tx = db.transaction('pending', 'readwrite')
+    const previous = (await tx.store.get(session.id)) as Recovery | undefined
+    const allFiles = [
+      ...new Map([...(previous?.files ?? []), ...files].map((f) => [f.id, f])).values(),
+    ]
+    const revision = previous?.revision ?? revisions.get(session.id) ?? 0
+    await tx.store.put({
+      session,
+      files: allFiles,
+      revision,
+      writeId: crypto.randomUUID(),
+    } satisfies Recovery)
+    await tx.done
+  })
+  localWrites = task.catch(() => {})
+  return task
+}
+const syncPending = async (id: string) => {
+  const db = await recoveryDB()
+  const snapshot = (await db.get('pending', id)) as Recovery | undefined
+  if (!snapshot) {
+    return
+  }
+  try {
+    await uploadFiles(snapshot.files)
+    const result = await pb.send<{ revision: number }>('/api/ds-chat/save', {
+      method: 'POST',
+      body: { session: snapshot.session, revision: snapshot.revision },
+    })
+    revisions.set(id, result.revision)
+    historySnapshot.set(id, result.revision)
+    conflicts.delete(id)
+    const tx = db.transaction('pending', 'readwrite')
+    const latest = (await tx.store.get(id)) as Recovery | undefined
+    if (latest?.writeId === snapshot.writeId) {
+      await tx.store.delete(id)
+    } else if (latest) {
+      await tx.store.put({ ...latest, revision: result.revision })
+    }
+    await tx.done
+  } catch (error) {
+    if (error instanceof ClientResponseError && error.status === 409) {
+      conflicts.add(id)
+    }
+    throw error
+  }
+}
+const writeSession = async (session: Session, files: local.StoredFile[]) => {
+  await persistRecovery(session, files)
+  await syncPending(session.id)
+}
+export const saveSession = (session: Session, files: local.StoredFile[] = []): Promise<void> => {
+  const cached = persistRecovery(session, files)
+  return enqueue(async () => {
+    await cached
+    await syncPending(session.id)
+  })
+}
+export const saveFiles = (files: local.StoredFile[]): Promise<void> =>
+  enqueue(() => uploadFiles(files))
+export const loadFile = async (id: string): Promise<Blob | undefined> => {
+  for (const recovery of await pendingRecovery()) {
+    const file = recovery.files.find((f) => f.id === id)
+    if (file) {
+      return file.blob
+    }
+  }
+  let record: RecordModel
+  try {
+    record = await pb.collection('chat_files').getFirstListItem(pb.filter('fid = {:id}', { id }))
+  } catch (error) {
+    if (error instanceof ClientResponseError && error.status === 404) {
+      return undefined
+    }
+    throw error
+  }
+  const token = await pb.files.getToken()
+  const response = await fetch(pb.files.getURL(record, record.original, { token }))
+  if (!response.ok) {
+    throw new Error(`Attachment download failed (${response.status}).`)
+  }
+  return new Blob([await response.blob()], { type: record.mime || 'application/octet-stream' })
+}
+export const deleteSession = (id: string): Promise<void> =>
+  enqueue(async () => {
+    await localWrites
+    const record = await getRemote(id)
+    if (record && !record.deleted) {
+      const result = await pb.send<{ revision: number }>('/api/ds-chat/save', {
+        method: 'POST',
+        body: {
+          session: record.payload,
+          revision: revisions.get(id) ?? record.revision,
+          deleted: true,
+        },
+      })
+      revisions.set(id, result.revision)
+    }
+    await (await recoveryDB()).delete('pending', id)
+    historySnapshot.delete(id)
+    conflicts.delete(id)
+  })
 
-/** 本地存储失败不打断对话，只在控制台留痕 */
-export const reportStorageError = (action: string) => (error: unknown) => {
-  // eslint-disable-next-line no-console
-  console.error(`[storage] ${action} failed`, error)
+// Keep archive validation/staging local; replace the remote history in one transaction.
+export const commitStaging = (): Promise<SessionSummary[]> =>
+  enqueue(async () => {
+    await localWrites
+    const staging = await openDB('chat-demo')
+    const sessions = (await staging.getAll('sessionsStaging')) as Session[]
+    const files = (await staging.getAll('filesStaging')) as local.StoredFile[]
+    await uploadFiles(files)
+    const expected = [...historySnapshot].map(([sid, revision]) => ({ sid, revision }))
+    // The revisions must come from the snapshot that the UI displayed, not a fresh snapshot.
+    await pb.send('/api/ds-chat/replace', { method: 'POST', body: { sessions, expected } })
+    revisions.clear()
+    historySnapshot.clear()
+    conflicts.clear()
+    await (
+      await recoveryDB()
+    )
+      .clear('pending')
+      .catch(local.reportStorageError('clear recovery after server history replacement'))
+    await local
+      .clearStaging()
+      .catch(local.reportStorageError('clear staging after server history replacement'))
+    return sessions.map(toSessionSummary)
+  })
+
+export const localHistoryAvailable = async () => {
+  if (await (await recoveryDB()).get('meta', 'browser-history-imported')) {
+    return 0
+  }
+  return (await local.loadSessionSummaries()).length
+}
+export const importBrowserHistory = (): Promise<void> =>
+  enqueue(async () => {
+    for (const summary of await local.loadSessionSummaries()) {
+      let session = await local.loadSession(summary.id)
+      if (!session) {
+        continue
+      }
+      if (await getRemote(session.id)) {
+        session = {
+          ...session,
+          id: crypto.randomUUID(),
+          title: `${session.title || 'Chat'} (browser import)`,
+        }
+      }
+      const ids = new Set(
+        session.messages.flatMap((m) => (m.role === 'user' ? m.files.map((f) => f.id) : []))
+      )
+      const files: local.StoredFile[] = []
+      for (const id of ids) {
+        const blob = await local.loadFile(id)
+        if (blob) {
+          files.push({ id, blob })
+        }
+      }
+      await writeSession(session, files)
+    }
+    await (await recoveryDB()).put('meta', true, 'browser-history-imported')
+  })
+export const discardRecovery = async (id: string) => {
+  await (await recoveryDB()).delete('pending', id)
+  historySnapshot.delete(id)
+  conflicts.delete(id)
+  revisions.delete(id)
 }

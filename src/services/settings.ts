@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ChatModel, ReasoningEffort } from './api/types.js'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -14,6 +15,8 @@ type Settings = {
   themePreference: ThemePreference
   location: UserLocation | null
   ttsVoice: TtsVoice
+  model: ChatModel
+  reasoningEffort: ReasoningEffort
   thinking: boolean
   search: boolean
   siderCollapsed: boolean
@@ -25,6 +28,8 @@ const KEYS = {
   location: 'chat-demo:location',
   themePreference: 'chat-demo:theme-preference',
   ttsVoice: 'chat-demo:tts-voice',
+  model: 'chat-demo:model',
+  reasoningEffort: 'chat-demo:reasoning-effort',
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
   siderCollapsed: 'chat-demo:sider-collapsed',
@@ -93,6 +98,13 @@ export const useSettings = create<Settings>(() => ({
   location: initialLocation(),
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
+  model: read(KEYS.model) === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-flash',
+  reasoningEffort:
+    read(KEYS.reasoningEffort) === 'low'
+      ? 'low'
+      : read(KEYS.reasoningEffort) === 'max'
+        ? 'max'
+        : 'high',
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
@@ -137,4 +149,17 @@ export const setSearch = (search: boolean) => {
 export const setSiderCollapsed = (siderCollapsed: boolean) => {
   write(KEYS.siderCollapsed, String(siderCollapsed))
   useSettings.setState({ siderCollapsed })
+}
+
+export const setModel = (model: ChatModel) => {
+  write(KEYS.model, model)
+  useSettings.setState({ model })
+}
+
+export const setReasoningEffort = (effort: ReasoningEffort | 'off') => {
+  setThinking(effort !== 'off')
+  if (effort !== 'off') {
+    write(KEYS.reasoningEffort, effort)
+    useSettings.setState({ reasoningEffort: effort })
+  }
 }

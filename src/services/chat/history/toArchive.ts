@@ -247,6 +247,8 @@ export const toSessionFile = (original: Session, exportImage: ExportImage): Sess
       ...tree,
       role: message.role === 'user' ? 'USER' : 'ASSISTANT',
       status: message.role === 'user' ? 'FINISHED' : replyStatus(message),
+      ...(reply?.model ? { ds_chat_model: reply.model } : {}),
+      ...(reply?.reasoningEffort ? { ds_chat_effort: reply.reasoningEffort } : {}),
       thinking_enabled: reply?.thinking ?? false,
       search_enabled: reply?.search ?? false,
       accumulated_token_usage: message.role === 'user' ? 0 : contextTokens(message),

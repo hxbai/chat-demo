@@ -1,3 +1,4 @@
+import type { ChatModel, ReasoningEffort } from '../../api/types.js'
 /**
  * 历史会话导出产物（deepseek_data-*.zip）的类型定义。
  *
@@ -55,6 +56,8 @@ export type ChatMessage = {
   parent_id: number | null
   role: ChatRole
   status: ChatMessageStatus
+  ds_chat_model?: ChatModel
+  ds_chat_effort?: ReasoningEffort
   thinking_enabled: boolean
   search_enabled: boolean
   /** 沿分支累计的上下文 token */

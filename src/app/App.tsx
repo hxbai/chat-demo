@@ -1,3 +1,4 @@
+import { SyncBar } from './SyncBar.js'
 import { useEffect } from 'react'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
@@ -78,6 +79,7 @@ export const App = () => {
       <div ref={frameRef} className={styles.frame}>
         {isMobile ? <MobileSider /> : siderCollapsed ? null : <Sider />}
         <main className={styles.main}>
+          <SyncBar />
           {saveError ? (
             <div className={styles.saveError} role="alert">
               <span>{t('sessionSaveFailed')}</span>

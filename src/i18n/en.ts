@@ -1,6 +1,19 @@
 import type { zh } from './zh.js'
 
 export const en = {
+  modelPicker: 'Model and reasoning',
+  modelLabel: 'Model',
+  effortLabel: 'Effort',
+  effortOff: 'Off',
+  effortLow: 'Low',
+  effortHigh: 'High',
+  effortMax: 'Max',
+  pickerBack: 'Back',
+  modelFlashDescription: 'Text and images',
+  modelProDescription: 'Text and documents · no image input',
+  modelImageUnsupported:
+    'DeepSeek V4 Pro does not support image input. Choose DeepSeek Flash and regenerate the reply.',
+
   welcomeMessageChat250808: 'How can I help you?',
   contentCaveat: 'AI-generated, for reference only',
   expandSiderbarButton: 'Open sidebar',
@@ -10,11 +23,10 @@ export const en = {
   sessionLoading: 'Loading chats...',
   sessionListLoadFailed: 'Unable to load the chat list. Please try again.',
   sessionLoadFailed: 'Unable to load this chat. Please try again.',
-  sessionSaveFailed:
-    'Chats or attachments have not been saved locally. Retry before closing this page.',
+  sessionSaveFailed: 'Chats or attachments have not reached the server. Retry to sync them.',
   sessionDeleteFailed: 'Unable to delete this chat. Please try again.',
   settings: 'Settings',
-  appName: 'API usage demo',
+  appName: 'DS Chat',
   deleteSessionModalContentTitle: 'Delete chat?',
   deleteSessionWithFilesDescription:
     'This chat and its uploaded files will be permanently deleted and cannot be recovered. Delete this chat?',
@@ -114,9 +126,9 @@ export const en = {
   historyImportConfirm: 'Import',
   historyImportConfirmTitle: 'Import chat history?',
   historyImportConfirmDescription:
-    'The uploaded chat history will replace all your current chats. Import anyway?',
+    'This replaces your server chat history on every device. Export a backup first. Import anyway?',
   historyImportDescription:
-    'Importing chat history replaces all local chats and attachments. Supports ZIP files exported from DeepSeek.',
+    'Importing chat history replaces the shared server history on all devices. Supports ZIP files exported from DeepSeek.',
   historyImportedOne: 'Imported 1 chat',
   historyImported: 'Imported {count} chats',
   historyImportFailed:
@@ -124,12 +136,12 @@ export const en = {
   historyExportFailed: 'Export failed: {message}',
   exportAllLabel: 'Export all chats',
   historyExportDescription:
-    'Includes all chat history and locally stored images. Other attachments retain file details only. Your API Key is not included.',
+    'Includes all chat history and available images. Other attachments retain file details only. Your API Key is not included.',
   exportAllDownload: 'Download',
   deleteAllSessions: 'Delete all chats',
   deleteAllSessionsModalTitle: 'Once deleted, all chats will be cleared and cannot be recovered.',
   deleteAllSessionsModalDescription:
-    'Locally saved attachments and unsent drafts will also be deleted.',
+    'This deletes the shared chat history on every device and clears drafts on this device. Server attachments are retained for recovery.',
   historyDeleting: 'Deleting...',
   historyDeleted: 'Successfully deleted.',
   historyDeleteFailed: 'Failed to delete chats. Please try again.',

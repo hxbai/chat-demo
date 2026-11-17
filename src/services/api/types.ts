@@ -5,6 +5,7 @@
  */
 
 export type ChatModel = 'deepseek-flash' | 'deepseek-v4-pro'
+export type ReasoningEffort = 'low' | 'high' | 'max'
 
 // ---------- 响应：内容块 ----------
 
@@ -177,8 +178,9 @@ export type CreateMessageRequest = {
   system: string
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
+  output_config?: { effort: ReasoningEffort }
   tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
-  safety_check: { level: 'high' }
+  safety_check: { level: 'low' | 'high' }
   title?: { enabled: boolean }
 }
 

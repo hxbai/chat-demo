@@ -9,3 +9,11 @@ build/
 .env.*
 !.env.example
 tmp/
+
+# Local PocketBase runtime, credentials, data and generated app
+pocketbase/pocketbase
+pocketbase/pb_data/
+pocketbase/pb_public/
+pocketbase/pocketbase.exe
+test-results/
+playwright-report/

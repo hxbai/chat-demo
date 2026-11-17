@@ -1,4 +1,16 @@
 export const zh = {
+  modelPicker: '模型与推理',
+  modelLabel: '模型',
+  effortLabel: '推理强度',
+  effortOff: '关闭',
+  effortLow: '低',
+  effortHigh: '高',
+  effortMax: '最高',
+  pickerBack: '返回',
+  modelFlashDescription: '支持文字与图片',
+  modelProDescription: '文字与文档 · 不支持图片输入',
+  modelImageUnsupported: 'DeepSeek V4 Pro 不支持图片输入。请选择 DeepSeek Flash 后重新生成回答。',
+
   welcomeMessageChat250808: '今天有什么可以帮到你？',
   contentCaveat: '内容由 AI 生成，请仔细甄别',
   expandSiderbarButton: '打开边栏',
@@ -8,10 +20,10 @@ export const zh = {
   sessionLoading: '正在加载对话...',
   sessionListLoadFailed: '对话列表加载失败，请重试',
   sessionLoadFailed: '对话加载失败，请重试',
-  sessionSaveFailed: '对话或附件尚未保存到本机，关闭页面可能丢失，请重试',
+  sessionSaveFailed: '对话或附件尚未同步到服务器，请重试',
   sessionDeleteFailed: '删除对话失败，请重试',
   settings: '设置',
-  appName: 'API 使用 demo',
+  appName: 'DS Chat',
   deleteSessionModalContentTitle: '永久删除对话',
   deleteSessionWithFilesDescription: '删除后，该对话及其中上传的文件将不可恢复。确认删除吗？',
   cancel: '取消',
@@ -108,8 +120,10 @@ export const zh = {
   historyImport: '导入历史对话',
   historyImportConfirm: '确认导入',
   historyImportConfirmTitle: '确认导入历史对话？',
-  historyImportConfirmDescription: '上传的历史对话会覆盖当前所有对话记录，是否确认导入？',
-  historyImportDescription: '导入历史对话会覆盖全部本地对话和附件，支持 DeepSeek 导出的 ZIP 文件。',
+  historyImportConfirmDescription:
+    '导入将覆盖所有设备共享的服务器对话记录。请先导出备份，是否继续？',
+  historyImportDescription:
+    '导入历史对话会覆盖所有设备共享的服务器对话记录，支持 DeepSeek 导出的 ZIP 文件。',
   historyImportedOne: '已导入 1 个对话',
   historyImported: '已导入 {count} 个对话',
   historyImportFailed:
@@ -121,7 +135,8 @@ export const zh = {
   exportAllDownload: '下载',
   deleteAllSessions: '删除所有对话',
   deleteAllSessionsModalTitle: '删除后，所有对话都将被清空且无法找回',
-  deleteAllSessionsModalDescription: '本地保存的附件及未发送的草稿也将被删除。',
+  deleteAllSessionsModalDescription:
+    '所有设备共享的对话记录及此设备的草稿将被删除。服务器附件将保留以便恢复。',
   historyDeleting: '删除中...',
   historyDeleted: '删除成功',
   historyDeleteFailed: '删除失败，请重试',

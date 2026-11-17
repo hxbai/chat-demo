@@ -1,0 +1,78 @@
+.account-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+}
+.account-card {
+  width: min(100%, 420px);
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid #8390a544;
+  border-radius: 18px;
+  background: var(--dsw-alias-bg-base);
+}
+.account-card h1 {
+  font-size: 28px;
+}
+.account-card h2 {
+  font-size: 20px;
+}
+.account-card p {
+  line-height: 1.5;
+}
+.account-card label {
+  display: grid;
+  gap: 6px;
+}
+.account-card input {
+  padding: 12px;
+  border: 1px solid #8390a580;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.account-card button,
+.sync-bar button {
+  padding: 8px 12px;
+  border: 1px solid #8390a580;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.account-card button[type='submit'] {
+  background: #335dce;
+  color: white;
+}
+.account-note {
+  font-size: 13px;
+  opacity: 0.75;
+}
+.sync-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid #8390a533;
+}
+.sync-bar .sync-status {
+  flex: 1;
+}
+.sync-bar button {
+  padding: 4px 8px;
+}
+.sync-warning {
+  color: #b55e00;
+}
+.sync-error {
+  flex-basis: 100%;
+  line-height: 1.5;
+}

@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { ModelPicker } from './ModelPicker.js'
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   IconGlobeLanguageOutline14,
@@ -153,139 +154,146 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   }
 
   return (
-    <div
-      className={clsx(styles.wrapper, sessionId === null ? styles.home : styles.session)}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) {
-          textareaRef.current?.focus({ preventScroll: true })
-        }
-      }}
-    >
-      <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
-      <div className={styles.textareaWrapper}>
-        <textarea
-          ref={textareaRef}
-          className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
-          placeholder={t('chatInputPlaceholderChat')}
-          rows={2}
-          // 移动端不自动聚焦，避免一打开就弹出键盘
-          autoFocus={!isMobile}
-          disabled={importingHistory}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onMouseDown={(event) => {
-            // 首次点击时手动聚焦，避免 Safari 把整个页面滚到输入框位置。
-            if (isMobile && event.button === 0 && document.activeElement !== event.currentTarget) {
-              event.preventDefault()
-              event.currentTarget.focus({ preventScroll: true })
-            }
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              send()
-            }
-          }}
-          onPaste={(event) => {
-            const files = Array.from(event.clipboardData.files)
-            if (files.length > 0) {
-              event.preventDefault()
-              acceptFiles(files)
-            }
-          }}
-        />
-        {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
-        <div className={styles.mirror} aria-hidden>
-          {`${text}\n`}
-        </div>
-      </div>
-      <div className={styles.functionRow}>
-        {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
-        <div ref={togglesRef} className={styles.toggles}>
-          <Tooltip content={t('deactivatedThinkTooltip')}>
-            <button
-              type="button"
-              className={clsx(styles.toggle, thinking && styles.selected)}
-              aria-label={t('thinkingSwitch')}
-              aria-pressed={thinking}
-              onClick={() => setThinking(!thinking)}
-            >
-              <IconThinkOutline14 />
-              <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
-            </button>
-          </Tooltip>
-          <Tooltip content={t('deactivatedSearchTooltip')}>
-            <button
-              type="button"
-              className={clsx(styles.toggle, search && styles.selected)}
-              aria-label={t('search')}
-              aria-pressed={search}
-              onClick={() => setSearch(!search)}
-            >
-              <IconGlobeLanguageOutline14 />
-              <span className={styles.toggleLabel}>{t('search')}</span>
-            </button>
-          </Tooltip>
-        </div>
-        <div className={styles.right}>
-          <VoiceButton
-            status={voice.status}
-            disabled={!voice.available}
-            seconds={voice.seconds}
-            onClick={() => {
+    <>
+      <div
+        className={clsx(styles.wrapper, sessionId === null ? styles.home : styles.session)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            textareaRef.current?.focus({ preventScroll: true })
+          }
+        }}
+      >
+        <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+        <div className={styles.textareaWrapper}>
+          <textarea
+            ref={textareaRef}
+            className={clsx(styles.textarea, recording && isMobile && styles.textareaHidden)}
+            placeholder={t('chatInputPlaceholderChat')}
+            rows={2}
+            // 移动端不自动聚焦，避免一打开就弹出键盘
+            autoFocus={!isMobile}
+            disabled={importingHistory}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onMouseDown={(event) => {
+              // 首次点击时手动聚焦，避免 Safari 把整个页面滚到输入框位置。
               if (
-                voice.status !== 'idle' ||
-                (!useChatStore.getState().importingHistory && ensureApiKey())
+                isMobile &&
+                event.button === 0 &&
+                document.activeElement !== event.currentTarget
               ) {
-                void voice.toggle()
+                event.preventDefault()
+                event.currentTarget.focus({ preventScroll: true })
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                send()
+              }
+            }}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.files)
+              if (files.length > 0) {
+                event.preventDefault()
+                acceptFiles(files)
               }
             }}
           />
-          <IconButton
-            size="m"
-            tone="primary"
-            icon={<IconPaperclipOutline16 />}
-            tooltip={t('uploadFile')}
-            disabled={importingHistory}
-            onClick={() => ensureApiKey() && fileInputRef.current?.click()}
-          />
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            accept={ACCEPT}
-            onChange={(event) => {
-              acceptFiles(Array.from(event.target.files ?? []))
-              event.target.value = ''
-            }}
-          />
-          {streaming && sessionId ? (
-            <button
-              type="button"
-              className={styles.sendButton}
-              aria-label={t('chatInputStopButtonTooltip')}
-              onClick={() => {
-                stopReadAloud()
-                stopReply(sessionId)
-              }}
-            >
-              <IconStopFill16 />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={clsx(styles.sendButton, !canSend && styles.disabled)}
-              aria-label={t('send')}
-              aria-disabled={!canSend}
-              onClick={send}
-            >
-              <IconSendOutline16 />
-            </button>
-          )}
+          {recording && isMobile ? <Spectrum getAnalyser={voice.getAnalyser} /> : null}
+          <div className={styles.mirror} aria-hidden>
+            {`${text}\n`}
+          </div>
         </div>
+        <div className={styles.functionRow}>
+          {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
+          <div ref={togglesRef} className={styles.toggles}>
+            <Tooltip content={t('deactivatedThinkTooltip')}>
+              <button
+                type="button"
+                className={clsx(styles.toggle, thinking && styles.selected)}
+                aria-label={t('thinkingSwitch')}
+                aria-pressed={thinking}
+                onClick={() => setThinking(!thinking)}
+              >
+                <IconThinkOutline14 />
+                <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
+              </button>
+            </Tooltip>
+            <Tooltip content={t('deactivatedSearchTooltip')}>
+              <button
+                type="button"
+                className={clsx(styles.toggle, search && styles.selected)}
+                aria-label={t('search')}
+                aria-pressed={search}
+                onClick={() => setSearch(!search)}
+              >
+                <IconGlobeLanguageOutline14 />
+                <span className={styles.toggleLabel}>{t('search')}</span>
+              </button>
+            </Tooltip>
+          </div>
+          <div className={styles.right}>
+            <VoiceButton
+              status={voice.status}
+              disabled={!voice.available}
+              seconds={voice.seconds}
+              onClick={() => {
+                if (
+                  voice.status !== 'idle' ||
+                  (!useChatStore.getState().importingHistory && ensureApiKey())
+                ) {
+                  void voice.toggle()
+                }
+              }}
+            />
+            <IconButton
+              size="m"
+              tone="primary"
+              icon={<IconPaperclipOutline16 />}
+              tooltip={t('uploadFile')}
+              disabled={importingHistory}
+              onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              accept={ACCEPT}
+              onChange={(event) => {
+                acceptFiles(Array.from(event.target.files ?? []))
+                event.target.value = ''
+              }}
+            />
+            {streaming && sessionId ? (
+              <button
+                type="button"
+                className={styles.sendButton}
+                aria-label={t('chatInputStopButtonTooltip')}
+                onClick={() => {
+                  stopReadAloud()
+                  stopReply(sessionId)
+                }}
+              >
+                <IconStopFill16 />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={clsx(styles.sendButton, !canSend && styles.disabled)}
+                aria-label={t('send')}
+                aria-disabled={!canSend}
+                onClick={send}
+              >
+                <IconSendOutline16 />
+              </button>
+            )}
+          </div>
+        </div>
+        {dragging ? <DragMask /> : null}
       </div>
-      {dragging ? <DragMask /> : null}
-    </div>
+      <ModelPicker disabled={streaming || importingHistory} />
+    </>
   )
 }

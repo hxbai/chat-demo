@@ -7,6 +7,7 @@ import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from 
 import { useSettings } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import * as db from './db.js'
+import { pb } from '../pocketbase.js'
 import {
   clearAllDrafts,
   clearDraft,
@@ -38,8 +39,8 @@ const MODEL: ChatModel = 'deepseek-flash'
 const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
-/** 安全审核固定开启，所有请求都走扩展模式 */
-const SAFETY_CHECK = { level: 'high' } as const
+/** Use the provider default checks without the optional additional full-output review. */
+const SAFETY_CHECK = { level: 'low' } as const
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
@@ -255,12 +256,13 @@ export const bindChatPersistence = () => {
 
 /** 按当前开关创建回复：深度思考对应 thinking，智能搜索控制 deepseek_web_search。 */
 const createReply = (): AssistantMessage => {
-  const { thinking, search } = useSettings.getState()
+  const { thinking, search, model, reasoningEffort } = useSettings.getState()
   return {
     id: createId(),
     role: 'assistant',
     createdAt: Date.now(),
-    model: MODEL,
+    model,
+    reasoningEffort,
     thinking,
     search,
     prefix: true,
@@ -301,7 +303,23 @@ export const initChat = (): Promise<void> => {
     try {
       const summaries = await db.loadSessionSummaries()
       if (epoch === historyEpoch) {
-        set({ ready: true, sessions: sortSessions(summaries) })
+        db.acceptHistorySnapshot()
+        const recovery = await db.pendingRecovery()
+        if (epoch !== historyEpoch) {
+          return
+        }
+        for (const item of recovery) {
+          unsavedSessions.add(item.session.id)
+        }
+        set({
+          ready: true,
+          sessions: sortSessions(summaries),
+          sessionCache: Object.fromEntries(
+            recovery.map((item) => [item.session.id, settleInterrupted(item.session)])
+          ),
+          sessionSaveErrors: Object.fromEntries(recovery.map((item) => [item.session.id, true])),
+        })
+        retrySaveSessions()
       }
     } catch (error) {
       if (epoch === historyEpoch) {
@@ -348,9 +366,7 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
       const session = sameSummary(settled, summary) ? settled : { ...settled, ...summary }
       touchSession(id)
       set((state) => ({ sessionCache: { ...state.sessionCache, [id]: session } }))
-      if (session !== stored) {
-        persist(id)
-      }
+      // Settling a remote stream for display must not overwrite its generating device.
       trimSessionCache()
     } catch (error) {
       if (epoch === historyEpoch && sessionLoads.get(id) === load) {
@@ -460,21 +476,19 @@ export const renameSession = (id: string, title: string) => {
   if (get().importingHistory || deletingSessions.has(id)) {
     return
   }
-  const controller = getStreamController(id)
-  if (controller) {
-    titleRequests.delete(controller)
-  }
-  if (getSession(id)) {
+  void (async () => {
+    // Load the full version before editing so renames use the same recovery/conflict path.
+    await ensureSessionLoaded(id)
+    if (get().importingHistory || deletingSessions.has(id) || !getSession(id)) {
+      return
+    }
+    const controller = getStreamController(id)
+    if (controller) {
+      titleRequests.delete(controller)
+    }
     updateSession(id, (session) => ({ ...session, title }))
     persist(id)
-  } else {
-    set((state) => ({
-      sessions: state.sessions.map((session) =>
-        session.id === id ? { ...session, title } : session
-      ),
-    }))
-    void db.renameSession(id, title).catch(db.reportStorageError('rename session'))
-  }
+  })()
 }
 
 /**
@@ -705,11 +719,12 @@ export const continueReply = (sessionId: string, messageId: string) => {
   ) {
     return
   }
-  const { thinking, search } = useSettings.getState()
+  const { thinking, search, model, reasoningEffort } = useSettings.getState()
   const reply: AssistantMessage = {
     ...previous,
     // 未记录请求配置的回复，续写时使用默认模型和当前开关。
-    model: previous.model ?? MODEL,
+    model: previous.model ?? model,
+    reasoningEffort: previous.reasoningEffort ?? reasoningEffort,
     thinking: previous.thinking ?? thinking,
     search: previous.search ?? search,
     status: 'pending',
@@ -973,6 +988,10 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     updateReply(sessionId, reply)
   }
   streamFlushes.set(sessionId, flush)
+  const checkpoint = window.setInterval(() => {
+    flush()
+    persist(sessionId)
+  }, 3000)
 
   try {
     for (let attempt = 0; ; attempt += 1) {
@@ -996,6 +1015,17 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           initial.thinking ?? false,
           latestReminder
         )
+        if (
+          initial.model === 'deepseek-v4-pro' &&
+          messages.some(
+            (message) =>
+              message.role === 'user' &&
+              Array.isArray(message.content) &&
+              message.content.some((block) => block.type === 'image')
+          )
+        ) {
+          throw new ApiError('protocol', { key: 'modelImageUnsupported' })
+        }
         const events = streamMessage(
           useSettings.getState().apiKey ?? '',
           {
@@ -1003,6 +1033,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             system: SYSTEM_PROMPT,
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
+            ...(initial.thinking
+              ? { output_config: { effort: initial.reasoningEffort ?? 'high' } }
+              : {}),
             safety_check: SAFETY_CHECK,
             tools: serverTools(initial.search ?? false),
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
@@ -1080,6 +1113,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       }
     }
   } finally {
+    window.clearInterval(checkpoint)
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
@@ -1091,4 +1125,138 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     }))
     persist(sessionId)
   }
+}
+
+/** Refresh only when local changes are safely saved. A stale writer keeps its recovery snapshot. */
+let refreshing = false
+export const refreshHistory = async () => {
+  if (
+    refreshing ||
+    !get().ready ||
+    get().importingHistory ||
+    unsavedSessions.size ||
+    Object.keys(get().streaming).length ||
+    sessionLoads.size
+  ) {
+    return
+  }
+  refreshing = true
+  try {
+    await db.hasPendingWrites()
+    if (get().importingHistory || unsavedSessions.size || Object.keys(get().streaming).length) {
+      return
+    }
+    const summaries = await db.loadSessionSummaries()
+    const activeId = get().activeId
+    const active =
+      activeId && summaries.some((s) => s.id === activeId)
+        ? await db.readSessionSnapshot(activeId, getSession(activeId))
+        : undefined
+    if (get().importingHistory || unsavedSessions.size || Object.keys(get().streaming).length) {
+      return
+    }
+    if (get().activeId !== activeId) {
+      return
+    }
+    db.acceptHistorySnapshot()
+    if (active) {
+      db.acceptSessionSnapshot(active.session.id, active.revision)
+    }
+    set({
+      sessions: sortSessions(summaries),
+      sessionCache: active
+        ? { [active.session.id]: settleInterrupted(normalizeSession(active.session)) }
+        : {},
+      activeId: active ? active.session.id : null,
+      sessionLoadErrors: {},
+      sessionSaveErrors: {},
+    })
+    window.dispatchEvent(new Event('ds-chat-synced'))
+  } finally {
+    refreshing = false
+  }
+}
+
+export const bindHistorySync = () => {
+  let stopped = false
+  let timer = 0
+  const refresh = () => {
+    if (stopped) {
+      return
+    }
+    retrySaveSessions()
+    void refreshHistory().catch(() => window.dispatchEvent(new Event('ds-chat-sync-error')))
+  }
+  const schedule = () => {
+    window.clearTimeout(timer)
+    timer = window.setTimeout(refresh, 300)
+  }
+  // Realtime is supplemented by polling to recover after sleep, missed events, or reconnects.
+  const interval = window.setInterval(refresh, 5000)
+  window.addEventListener('online', refresh)
+  window.addEventListener('focus', refresh)
+  void pb
+    .collection('chat_sessions')
+    .subscribe('*', schedule)
+    .then((unsubscribe) => {
+      if (stopped) {
+        unsubscribe()
+      }
+    })
+    .catch(() => {})
+  return () => {
+    stopped = true
+    window.clearTimeout(timer)
+    window.clearInterval(interval)
+    window.removeEventListener('online', refresh)
+    window.removeEventListener('focus', refresh)
+    void pb.collection('chat_sessions').unsubscribe('*')
+  }
+}
+
+/** Preserve the losing device's complete message tree as a separate conversation. */
+export const saveConflictsAsCopies = async () => {
+  if (get().importingHistory || Object.keys(get().streaming).length) {
+    return
+  }
+  set({ importingHistory: true })
+  try {
+    await db.hasPendingWrites()
+    if (!db.conflicts.size) {
+      throw new Error('No conflicting chats were found. Use Retry to reconnect and save.')
+    }
+    for (const id of [...db.conflicts]) {
+      const recovery = (await db.pendingRecovery()).find((r) => r.session.id === id)
+      const session = getSession(id) ?? recovery?.session
+      if (!session) {
+        continue
+      }
+      const copy = {
+        ...session,
+        id: createId(),
+        title: `${session.title || 'Chat'} (conflict copy)`,
+        updatedAt: Date.now(),
+      }
+      await db.saveSession(copy, [...(recovery?.files ?? []), ...(pendingFiles.get(id) ?? [])])
+      await db.discardRecovery(id)
+      unsavedSessions.delete(id)
+      pendingFiles.delete(id)
+    }
+  } finally {
+    set({ importingHistory: false })
+  }
+  await refreshHistory()
+}
+
+export const migrateBrowserHistory = async () => {
+  if (get().importingHistory || unsavedSessions.size || Object.keys(get().streaming).length) {
+    throw new Error('Finish saving the current chats before importing browser history.')
+  }
+  set({ importingHistory: true })
+  try {
+    await db.importBrowserHistory()
+  } finally {
+    set({ importingHistory: false })
+  }
+  await refreshHistory()
 }
