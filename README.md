@@ -80,6 +80,10 @@ If this origin already has chats in the upstream app's `chat-demo` IndexedDB, **
 
 Settings → Data → Import and Delete all chats operate on the **shared server history for all devices**. Import validates and stages the archive locally, uploads its images, then replaces the server conversation set in a single transaction. Concurrent server changes cause replacement to fail rather than erase those changes. The JSON replacement request is limited to PocketBase's default 32 MiB request size; each individual conversation JSON is limited to 20 MB.
 
+Use **Projects → New folder** in the sidebar to organize conversations. Each folder has a **+** button to start a chat inside it; use a chat's **Move to folder** menu item to move existing chats or return them to the main list. Folders can be collapsed, renamed, or deleted. Deleting a folder keeps its chats in the main list. Folder names and membership sync with your account. After updating an existing installation, restart PocketBase so it applies the new `chat_projects` migration before using the new frontend.
+
+Folder organization is included in full server backups. The upstream conversation ZIP format does not include folders, so ZIP imports return chats to the main list.
+
 The upstream ZIP format exports conversations and available original **images**, with metadata for other attachments. It excludes API keys and preferences. Server backups, described below, include all locally stored attachments.
 
 For recovery, unused server attachments are retained when chats are deleted or history is replaced. They consume disk until an administrator removes them or restores/cleans the database. Uploaded files at DeepSeek are separate and are not removed by ds-chat.

@@ -1,6 +1,21 @@
 import type { zh } from './zh.js'
 
 export const en = {
+  projects: 'Projects',
+  newProject: 'New folder',
+  projectName: 'Folder name',
+  createProject: 'Create folder',
+  renameProject: 'Rename folder',
+  deleteProject: 'Delete folder',
+  deleteProjectDescription: 'Delete this folder? Its chats will stay in your chat list.',
+  projectError: 'Could not save folder changes. Please try again.',
+  emptyProject: 'No chats yet',
+  newProjectChat: 'New chat in {name}',
+  moveToProject: 'Move to folder',
+  noProject: 'No folder',
+  moveChat: 'Move chat',
+  saveProject: 'Save',
+
   modelPicker: 'Model and reasoning',
   modelLabel: 'Model',
   effortLabel: 'Effort',

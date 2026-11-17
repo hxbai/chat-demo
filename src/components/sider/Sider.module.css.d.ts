@@ -1,4 +1,11 @@
 declare const styles: {
+  readonly "projectHeader": string;
+  readonly "projectRow": string;
+  readonly "projectToggle": string;
+  readonly "projectChats": string;
+  readonly "emptyProject": string;
+  readonly "projectInput": string;
+
   readonly "sider": string;
   readonly "top": string;
   readonly "appName": string;

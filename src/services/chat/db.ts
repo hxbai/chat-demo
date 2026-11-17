@@ -2,7 +2,7 @@ import { openDB, type IDBPDatabase } from 'idb'
 import { ClientResponseError, type RecordModel } from 'pocketbase'
 import { pb } from '../pocketbase.js'
 import * as local from './localDb.js'
-import { toSessionSummary, type Session, type SessionSummary } from './types.js'
+import { toSessionSummary, type Project, type Session, type SessionSummary } from './types.js'
 
 export type { StoredFile } from './localDb.js'
 export {
@@ -323,3 +323,13 @@ export const discardRecovery = async (id: string) => {
   conflicts.delete(id)
   revisions.delete(id)
 }
+
+export const loadProjects = async (): Promise<Project[]> =>
+  (await pb.collection('chat_projects').getFullList()).map(({ id, name }) => ({ id, name }))
+export const createProject = async (name: string): Promise<Project> => {
+  const record = await pb.collection('chat_projects').create({ name, owner: owner() })
+  return { id: record.id, name: record.name }
+}
+export const renameProject = (id: string, name: string) =>
+  pb.collection('chat_projects').update(id, { name })
+export const deleteProject = (id: string) => pb.collection('chat_projects').delete(id)

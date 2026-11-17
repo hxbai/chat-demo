@@ -308,3 +308,88 @@ test('Model and effort selections persist, reach the API, and stay attached to c
     await f.close()
   }
 })
+
+test('Project folders sync, contain new chats, and keep chats when deleted', async ({
+  browser,
+}) => {
+  const f = await fixture()
+  const context = await browser.newContext()
+  const second = await browser.newContext()
+  try {
+    await f.client.send('/api/ds-chat/save', {
+      method: 'POST',
+      body: { session: session(), revision: 0 },
+    })
+    await context.route('https://api.deepseek.com/**', (route) =>
+      route.fulfill({
+        contentType: 'text/event-stream',
+        headers: { 'access-control-allow-origin': '*' },
+        body: [
+          { type: 'message_start', message: { id: 'reply', model: 'deepseek-flash' } },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn', title: 'Folder chat' } },
+          { type: 'message_stop' },
+        ]
+          .map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`)
+          .join(''),
+      })
+    )
+    const page = await signIn(context, f.url)
+    const phone = await signIn(second, f.url)
+    await page.getByRole('button', { name: 'New folder', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Folder name' }).fill('Research')
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(
+      page.getByRole('button', { name: 'New chat in Research', exact: true })
+    ).toBeVisible()
+    await expect(
+      phone.getByRole('button', { name: 'New chat in Research', exact: true })
+    ).toBeVisible({ timeout: 12000 })
+    const [project] = await f.client.collection('chat_projects').getFullList()
+    await page.reload()
+    await page.getByRole('button', { name: 'New chat in Research', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Enter a message' }).fill('A chat inside this folder')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect
+      .poll(
+        async () =>
+          (await records(f.client))
+            .find((r) => r.payload.projectId === project.id)
+            ?.payload.messages.at(-1)?.status
+      )
+      .toBe('done')
+    expect(
+      (await records(f.client)).find((r) => r.payload.projectId === project.id).summary.projectId
+    ).toBe(project.id)
+    // Move an existing conversation using its menu.
+    const existing = page.getByText('Shared history', { exact: true }).locator('..')
+    await existing.hover()
+    await existing.getByRole('button', { name: 'More', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Move to folder', exact: true }).click()
+    await page.getByRole('combobox', { name: 'Move to folder' }).selectOption(project.id)
+    await page.getByRole('button', { name: 'Move chat', exact: true }).click()
+    await expect
+      .poll(
+        async () =>
+          (await records(f.client)).find((r) => r.sid === 'test-conversation').summary.projectId
+      )
+      .toBe(project.id)
+    await page.getByRole('button', { name: 'Rename folder: Research', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Folder name' }).fill('Work')
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'New chat in Work', exact: true })).toBeVisible()
+    await expect(phone.getByRole('button', { name: 'New chat in Work', exact: true })).toBeVisible({
+      timeout: 12000,
+    })
+    await page.getByRole('button', { name: 'Delete folder: Work', exact: true }).click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'New chat in Work', exact: true })).toHaveCount(0)
+    await expect(page.getByText('Shared history', { exact: true })).toBeVisible()
+    expect(await records(f.client)).toHaveLength(2)
+    await page.reload()
+    await expect(page.getByText('Shared history', { exact: true })).toBeVisible()
+  } finally {
+    await second.close()
+    await context.close()
+    await f.close()
+  }
+})

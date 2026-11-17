@@ -323,3 +323,26 @@ if (process.argv[1] === fileURLToPath(import.meta.url))
       await f.close()
     }
   })
+
+test('Project folders are private to their owner', async () => {
+  const f = await fixture()
+  try {
+    const project = await f.client
+      .collection('chat_projects')
+      .create({ name: 'Private work', owner: f.client.authStore.record.id })
+    const other = new PocketBase(f.url)
+    await other
+      .collection('chat_users')
+      .authWithPassword('other@example.test', 'test-password-for-other-user')
+    assert.equal((await other.collection('chat_projects').getFullList()).length, 0)
+    await assert.rejects(other.collection('chat_projects').update(project.id, { name: 'Stolen' }))
+    await assert.rejects(other.collection('chat_projects').delete(project.id))
+    await assert.rejects(
+      f.client.collection('chat_projects').update(project.id, { owner: other.authStore.record.id })
+    )
+    await f.client.collection('chat_projects').update(project.id, { name: 'Renamed' })
+    assert.equal((await f.client.collection('chat_projects').getOne(project.id)).name, 'Renamed')
+  } finally {
+    await f.close()
+  }
+})

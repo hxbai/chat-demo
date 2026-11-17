@@ -9,6 +9,8 @@ module.exports = {
       session.title.length > 10000 ||
       !Number.isFinite(session.createdAt) ||
       !Number.isFinite(session.updatedAt) ||
+      (session.projectId != null &&
+        (typeof session.projectId !== 'string' || session.projectId.length > 200)) ||
       !Array.isArray(session.messages)
     )
       throw new BadRequestError('Invalid conversation.')
@@ -41,6 +43,7 @@ module.exports = {
     record.set('deleted', deleted)
     record.set('payload', deleted ? null : session)
     record.set('summary', {
+      projectId: session.projectId || null,
       id: session.id,
       title: session.title,
       createdAt: session.createdAt,

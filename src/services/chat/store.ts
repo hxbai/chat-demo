@@ -28,6 +28,7 @@ import {
   type AssistantMessage,
   type FileAttachment,
   type Message,
+  type Project,
   type Session,
   type SessionSummary,
   type UserMessage,
@@ -61,6 +62,8 @@ const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
 const titleRequests = new Set<AbortController>()
 
 type ChatState = {
+  projects: Project[]
+  newProjectId: string | null
   ready: boolean
   initError: boolean
   /** 历史导入或全部删除期间锁定交互，提交成功前仍展示原有记录。 */
@@ -77,6 +80,8 @@ type ChatState = {
 }
 
 export const useChatStore = create<ChatState>(() => ({
+  projects: [],
+  newProjectId: null,
   ready: false,
   initError: false,
   importingHistory: false,
@@ -104,7 +109,10 @@ const getStreamController = (id: string) => {
 }
 
 const sameSummary = (a: SessionSummary, b: SessionSummary) =>
-  a.title === b.title && a.createdAt === b.createdAt && a.updatedAt === b.updatedAt
+  a.projectId === b.projectId &&
+  a.title === b.title &&
+  a.createdAt === b.createdAt &&
+  a.updatedAt === b.updatedAt
 
 const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
@@ -301,7 +309,10 @@ export const initChat = (): Promise<void> => {
   set({ initError: false })
   initTask = (async () => {
     try {
-      const summaries = await db.loadSessionSummaries()
+      const [summaries, projects] = await Promise.all([
+        db.loadSessionSummaries(),
+        db.loadProjects(),
+      ])
       if (epoch === historyEpoch) {
         db.acceptHistorySnapshot()
         const recovery = await db.pendingRecovery()
@@ -313,6 +324,7 @@ export const initChat = (): Promise<void> => {
         }
         set({
           ready: true,
+          projects,
           sessions: sortSessions(summaries),
           sessionCache: Object.fromEntries(
             recovery.map((item) => [item.session.id, settleInterrupted(item.session)])
@@ -441,6 +453,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionLoadErrors: {},
       sessionSaveErrors: {},
       activeId: null,
+      newProjectId: null,
     })
     return summaries.length
   } finally {
@@ -456,9 +469,9 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
   }
 }
 
-export const newChat = () => {
+export const newChat = (projectId: string | null = null) => {
   if (!get().importingHistory) {
-    set({ activeId: null })
+    set({ activeId: null, newProjectId: projectId })
     trimSessionCache()
   }
 }
@@ -466,7 +479,7 @@ export const newChat = () => {
 export const selectSession = (id: string) => {
   if (!get().importingHistory && get().sessions.some((session) => session.id === id)) {
     touchSession(id)
-    set({ activeId: id })
+    set({ activeId: id, newProjectId: null })
     void ensureSessionLoaded(id)
     trimSessionCache()
   }
@@ -580,6 +593,9 @@ export const sendMessage = (targetSessionId: string | null) => {
     const session: Session = {
       id: createId(),
       title: '',
+      projectId: get().projects.some((p) => p.id === get().newProjectId)
+        ? get().newProjectId
+        : null,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -1146,7 +1162,7 @@ export const refreshHistory = async () => {
     if (get().importingHistory || unsavedSessions.size || Object.keys(get().streaming).length) {
       return
     }
-    const summaries = await db.loadSessionSummaries()
+    const [summaries, projects] = await Promise.all([db.loadSessionSummaries(), db.loadProjects()])
     const activeId = get().activeId
     const active =
       activeId && summaries.some((s) => s.id === activeId)
@@ -1163,6 +1179,7 @@ export const refreshHistory = async () => {
       db.acceptSessionSnapshot(active.session.id, active.revision)
     }
     set({
+      projects,
       sessions: sortSessions(summaries),
       sessionCache: active
         ? { [active.session.id]: settleInterrupted(normalizeSession(active.session)) }
@@ -1259,4 +1276,34 @@ export const migrateBrowserHistory = async () => {
     set({ importingHistory: false })
   }
   await refreshHistory()
+}
+
+export const createProject = async (name: string) => {
+  const project = await db.createProject(name.trim())
+  set((state) => ({ projects: [...state.projects, project] }))
+  return project
+}
+export const renameProject = async (id: string, name: string) => {
+  await db.renameProject(id, name.trim())
+  set((state) => ({
+    projects: state.projects.map((p) => (p.id === id ? { ...p, name: name.trim() } : p)),
+  }))
+}
+export const deleteProject = async (id: string) => {
+  await db.deleteProject(id)
+  set((state) => ({
+    projects: state.projects.filter((p) => p.id !== id),
+    newProjectId: state.newProjectId === id ? null : state.newProjectId,
+  }))
+}
+export const moveSession = async (id: string, projectId: string | null) => {
+  if (get().importingHistory || deletingSessions.has(id)) {
+    return
+  }
+  await ensureSessionLoaded(id)
+  if (!getSession(id) || get().importingHistory || deletingSessions.has(id)) {
+    throw new Error('Unable to load chat')
+  }
+  updateSession(id, (session) => ({ ...session, projectId }))
+  persist(id)
 }

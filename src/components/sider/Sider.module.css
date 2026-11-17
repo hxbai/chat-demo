@@ -245,3 +245,57 @@
     line-height: 22px;
   }
 }
+
+.projectHeader,
+.projectRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dsw-alias-label-primary);
+}
+.projectHeader {
+  justify-content: space-between;
+  padding: 4px 8px 8px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.projectHeader button,
+.projectRow button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.projectHeader button:hover,
+.projectRow button:hover {
+  background: var(--dsw-specific-sidebar-nav-item-hover);
+}
+.projectToggle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.projectChats {
+  padding-left: 12px;
+}
+.emptyProject {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.projectInput {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  font: inherit;
+}
