@@ -69,6 +69,10 @@ const recoveryDB = () => {
 }
 export const pendingRecovery = async (): Promise<Recovery[]> =>
   (await recoveryDB()).getAll('pending')
+const readRecovery = async (id: string): Promise<Recovery | undefined> =>
+  (await recoveryDB()).get('pending', id)
+export const loadPendingSessionFiles = async (id: string): Promise<local.StoredFile[]> =>
+  (await readRecovery(id))?.files ?? []
 export const hasPendingWrites = () => queue
 const remoteRecords = () =>
   pb.collection<RemoteSession>('chat_sessions').getFullList({
@@ -98,7 +102,7 @@ export const loadSessionSummaries = async (): Promise<SessionSummary[]> => {
   return [...byId.values()]
 }
 export const loadSession = async (id: string): Promise<Session | undefined> => {
-  const recovery = (await (await recoveryDB()).get('pending', id)) as Recovery | undefined
+  const recovery = await readRecovery(id)
   if (recovery) {
     revisions.set(id, recovery.revision)
     return recovery.session

@@ -66,6 +66,8 @@ Requests use `safety_check: { level: "low" }`, DeepSeek's default content checks
 
 ## History behavior
 
+Use **Fork from here** beneath a completed or stopped reply to open a separate conversation in the same folder. The fork includes the visible conversation through that reply and its attachments.
+
 - Full conversations, including alternate message branches, are stored as JSON in `chat_sessions`; immutable original attachments are stored as protected files in `chat_files`.
 - Realtime notifications trigger refreshes; a five-second fallback poll handles reconnects and missed events. Local edits and generated replies are not replaced by background refreshes.
 - Replies are checkpointed about every three seconds, when the page hides, and when generation ends. The last few seconds can be lost if the browser or device abruptly crashes; generating replies do not continue on the server after the generating browser closes.

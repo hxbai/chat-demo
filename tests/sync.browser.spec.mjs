@@ -25,6 +25,155 @@ async function records(pb) {
   return pb.collection('chat_sessions').getFullList({ filter: 'deleted=false' })
 }
 
+test('Forking an earlier reply syncs only its visible history and keeps its attachment', async ({
+  browser,
+}) => {
+  const f = await fixture()
+  const first = await browser.newContext()
+  const second = await browser.newContext()
+  try {
+    const owner = f.client.authStore.record.id
+    const project = await f.client.collection('chat_projects').create({ owner, name: 'Research' })
+    const image = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6NtwAAAAASUVORK5CYII=',
+      'base64'
+    )
+    const file = new FormData()
+    file.set('owner', owner)
+    file.set('fid', 'fork-image')
+    file.set('mime', 'image/png')
+    file.set('original', new Blob([image], { type: 'image/png' }), 'pixel.png')
+    await f.client.collection('chat_files').create(file)
+
+    const original = session()
+    original.projectId = project.id
+    original.messages[0].files = [
+      {
+        id: 'fork-image',
+        serverId: 'file-api-fork-image',
+        name: 'pixel.png',
+        size: image.length,
+        isImage: true,
+        mimeType: 'image/png',
+      },
+    ]
+    original.messages[2].selectedChildId = 'q2'
+    original.messages.push(
+      {
+        id: 'q2',
+        parentId: 'a2',
+        selectedChildId: 'a3',
+        role: 'user',
+        content: 'Later question',
+        files: [],
+        createdAt: 4,
+      },
+      {
+        id: 'a3',
+        parentId: 'q2',
+        role: 'assistant',
+        blocks: [{ type: 'text', text: 'Later answer' }],
+        createdAt: 5,
+        model: 'deepseek-flash',
+        prefix: true,
+        status: 'done',
+      }
+    )
+    await f.client.send('/api/ds-chat/save', {
+      method: 'POST',
+      body: { session: original, revision: 0 },
+    })
+
+    const laptop = await signIn(first, f.url)
+    const phone = await signIn(second, f.url)
+    await laptop.getByText('Shared history', { exact: true }).click()
+    await expect(laptop.getByText('Later answer', { exact: true })).toBeVisible()
+    await laptop.getByText('Alternate answer', { exact: true }).hover()
+    await first.setOffline(true)
+    await laptop.getByRole('button', { name: 'Fork from here', exact: true }).first().click({
+      timeout: 4000,
+    })
+    await expect(laptop.getByText('Fork of Shared history', { exact: true }).first()).toBeVisible()
+    await expect(laptop.getByText('Later answer', { exact: true })).toHaveCount(0)
+    expect(await records(f.client)).toHaveLength(1)
+
+    await first.setOffline(false)
+    const newChat = phone.getByText('Fork of Shared history', { exact: true }).first()
+    await expect(newChat).toBeVisible({ timeout: 12000 })
+    await newChat.click()
+    await expect(phone.getByText('Alternate answer', { exact: true })).toBeVisible()
+    await expect(phone.getByText('First answer', { exact: true })).toHaveCount(0)
+    await expect(phone.getByText('Later question', { exact: true })).toHaveCount(0)
+    const syncedImage = phone.locator('img[src^="blob:"]').first()
+    await expect(syncedImage).toBeVisible()
+    await expect.poll(() => syncedImage.evaluate((img) => img.naturalWidth)).toBe(1)
+
+    const saved = await records(f.client)
+    const fork = saved.find((record) => record.sid !== original.id).payload
+    const [question, reply] = fork.messages
+    expect(fork.messages).toHaveLength(2)
+    expect(fork.projectId).toBe(project.id)
+    expect(fork.rootMessageId).toBe(question.id)
+    expect(question.id).not.toBe('q1')
+    expect(question.selectedChildId).toBe(reply.id)
+    expect(reply.id).not.toBe('a2')
+    expect(reply.parentId).toBe(question.id)
+    expect(reply.selectedChildId).toBeUndefined()
+    expect(saved.find((record) => record.sid === original.id).payload).toEqual(original)
+    expect(await f.client.collection('chat_files').getFullList()).toHaveLength(1)
+
+    await second.route('https://api.deepseek.com/anthropic/v1/messages', (route) => {
+      if (route.request().method() === 'OPTIONS')
+        return route.fulfill({
+          status: 204,
+          headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
+        })
+      return route.fulfill({
+        contentType: 'text/event-stream',
+        headers: { 'access-control-allow-origin': '*' },
+        body: [
+          { type: 'message_start', message: { id: 'fork-reply', model: 'deepseek-flash' } },
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: 'Fork follow-up' },
+          },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+          { type: 'message_stop' },
+        ]
+          .map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`)
+          .join(''),
+      })
+    })
+    const followUp = phone.waitForRequest(
+      (request) =>
+        request.method() === 'POST' && request.url() === 'https://api.deepseek.com/anthropic/v1/messages'
+    )
+    await phone.getByRole('textbox', { name: 'Enter a message' }).fill('Continue the fork')
+    await phone.getByRole('button', { name: 'Send', exact: true }).click()
+    const { messages } = (await followUp).postDataJSON()
+    expect(
+      messages
+        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .map(({ content }) =>
+          typeof content === 'string'
+            ? content
+            : content.find((block) => block.type === 'text')?.text
+        )
+    ).toEqual(['Preserve branches', 'Alternate answer', 'Continue the fork'])
+    await expect(phone.getByText('Fork follow-up', { exact: true })).toBeVisible()
+    await expect
+      .poll(async () => (await records(f.client)).find((record) => record.sid === fork.id)?.payload.messages.length)
+      .toBe(4)
+    expect((await records(f.client)).find((record) => record.sid === original.id).payload).toEqual(original)
+  } finally {
+    await first.close()
+    await second.close()
+    await f.close()
+  }
+})
+
 test('Two devices sync branches, recover offline edits, and preserve conflicts as copies', async ({
   browser,
 }) => {

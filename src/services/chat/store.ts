@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { translate } from '../../i18n/index.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
@@ -483,6 +484,71 @@ export const selectSession = (id: string) => {
     void ensureSessionLoaded(id)
     trimSessionCache()
   }
+}
+
+/** 从当前分支复制到指定回复，保存为一条可独立继续的会话。 */
+export const forkSessionFromReply = async (sessionId: string, replyId: string) => {
+  const source = getSession(sessionId)
+  const account = pb.authStore.record?.id
+  const epoch = historyEpoch
+  if (!source || !account || get().importingHistory || deletingSessions.has(sessionId)) {
+    return
+  }
+  const path = getVisibleMessages(source)
+  const index = path.findIndex((message) => message.id === replyId)
+  const reply = path[index]
+  if (reply?.role !== 'assistant' || (reply.status !== 'done' && reply.status !== 'stopped')) {
+    return
+  }
+  const messages = path.slice(0, index + 1)
+  const fileIds = new Set(
+    messages.flatMap((message) =>
+      message.role === 'user' ? message.files.map((file) => file.id) : []
+    )
+  )
+  const recovered = fileIds.size ? await db.loadPendingSessionFiles(sessionId) : []
+  const { activeId, importingHistory, projects } = get()
+  if (
+    activeId !== sessionId ||
+    importingHistory ||
+    deletingSessions.has(sessionId) ||
+    epoch !== historyEpoch ||
+    account !== pb.authStore.record?.id
+  ) {
+    return
+  }
+
+  const now = Date.now()
+  const title = translate('forkTitle', { title: source.title || translate('untitledChat') })
+  const fork = appendBranch(
+    {
+      id: createId(),
+      title: title.slice(0, 10_000), // 与 PocketBase 会话标题长度限制一致。
+      projectId: projects.some((project) => project.id === source.projectId) ? source.projectId : null,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      rootMessageId: null,
+    },
+    null,
+    messages.map((message) => ({ ...structuredClone(message), id: createId() }))
+  )
+  // 已上传的原件按 ID 共用；为分叉独立保留还没同步的原件。
+  const files = [...recovered, ...(pendingFiles.get(sessionId) ?? [])].filter((file) =>
+    fileIds.has(file.id)
+  )
+  if (files.length) {
+    pendingFiles.set(fork.id, files)
+  }
+  touchSession(fork.id)
+  set((state) => ({
+    sessions: sortSessions([toSessionSummary(fork), ...state.sessions]),
+    sessionCache: { ...state.sessionCache, [fork.id]: fork },
+    activeId: fork.id,
+    newProjectId: null,
+  }))
+  persist(fork.id)
+  trimSessionCache()
 }
 
 export const renameSession = (id: string, title: string) => {
